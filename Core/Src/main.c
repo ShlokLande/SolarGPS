@@ -1,5 +1,4 @@
 /* USER CODE BEGIN Header */
-#include "imu_app.h"
 /**
   ******************************************************************************
   * @file           : main.c
@@ -22,6 +21,7 @@
 #include "i2c.h"
 #include "usart.h"
 #include "gpio.h"
+#include "gps_app.h"
 #include "gps_driver.h"
 
 /* Private includes ----------------------------------------------------------*/
@@ -92,8 +92,10 @@ int main(void)
   MX_GPIO_Init();
   MX_I2C1_Init();
   MX_USART2_UART_Init();
+  MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
-  ImuAppInit();
+  gps_config_meas_rate();
+  read_uart_gps_module(g_gps_data);
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -103,9 +105,8 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    ImuAppTask();
-    HAL_GPIO_TogglePin(LD2_GPIO_Port, LD2_Pin);   // heartbeat: proves you're looping
-    HAL_Delay(IMU_TASK_DELAY);  
+    gps_task();
+    HAL_Delay(GPS_TASK_DELAY);
   }
   /* USER CODE END 3 */
 }

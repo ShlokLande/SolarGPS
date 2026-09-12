@@ -1,6 +1,9 @@
 
 #include "main.h"
 #include "usart.h"
+#include "gps_app.h"
+#include "nmea_parse.h"
+#include "gps_driver.h"
 
 #define GPS_DEVICE_ADDRESS ((0x42)<<1)
 
@@ -23,8 +26,13 @@
 #define GPS_CONFIG_DELAY      1000
 
 bool g_gps_read_okay = false;
+GPS g_last_gps_fix = {0};
 uint8_t g_gps_data[GPS_MESSAGE_LEN];
 char gps_parse_data[GPS_MESSAGE_LEN];
+
+uint32_t g_gps_uart_error_code = 0;
+uint32_t g_gps_uart_error_count = 0;
+HAL_StatusTypeDef g_gps_uart_rx_status = HAL_ERROR;
 
 /* CAN HEADERS */
 #define GPS_CAN_MESSAGE_LENGTH                         8
@@ -96,15 +104,17 @@ CAN_TxHeaderTypeDef gps_true_mag_heading = {
  void read_uart_gps_module(uint8_t* receive_buffer)
  {
      g_gps_read_okay = false;
-     HAL_StatusTypeDef status = HAL_UART_Receive_IT(&huart2, receive_buffer, GPS_MESSAGE_LEN);
-     if(status == HAL_OK)
+     HAL_StatusTypeDef status = HAL_UART_Receive_IT(&huart1, receive_buffer, GPS_MESSAGE_LEN);
+     g_gps_uart_rx_status = status;
+     /*if(status == HAL_OK)
      {
-         g_tel_diagnostic_flags.bits.gps_read_fail = false;
+        g_tel_diagnostic_flags.bits.gps_read_fail = false;
      }
      else
      {
-         g_tel_diagnostic_flags.bits.gps_read_fail = true;
+        g_tel_diagnostic_flags.bits.gps_read_fail = true;
      }
+         */
  }
 
  /**
@@ -114,17 +124,13 @@ void gps_task()
 {
     if (g_gps_read_okay)
     {
-        GPS gps_data = {0};
+        nmea_parse(&g_last_gps_fix, g_gps_data);
 
-        nmea_parse(&gps_data, g_gps_data);
+        // CAN_tx_gps_data_msg(&gps_data);
 
-        CAN_tx_gps_data_msg(&gps_data);
-
-        HAL_GPIO_TogglePin(USER_LED_GPIO_Port, USER_LED_Pin);
+        memset(g_gps_data, 0, GPS_MESSAGE_LEN);
+        read_uart_gps_module(g_gps_data);
     }
-
-    memset(g_gps_data, 0, GPS_MESSAGE_LEN);
-    read_uart_gps_module(g_gps_data);
 }
 
 /**
@@ -172,20 +178,36 @@ void gps_task()
     uint8_t ckA;
     uint8_t ckB;
 
-    ubx_cksum(&frame[2], 4 + len, &ckA, &ckB); // len + 4 the length of the payload + 4 bytes of header in frame
+    // ubx_cksum(&frame[2], 4 + len, &ckA, &ckB); // len + 4 the length of the payload + 4 bytes of header in frame
 
     frame[6 + len] = ckA;
     frame[7 + len] = ckB;
 
-    HAL_StatusTypeDef status = HAL_UART_Transmit(&huart2, GPS_DEVICE_ADDRESS, frame, sizeof(frame), GPS_CONFIG_DELAY);
+    HAL_StatusTypeDef status = HAL_UART_Transmit(&huart1, frame, sizeof(frame), GPS_CONFIG_DELAY);
 
     return status;
 }
 
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
-    if (huart->Instance == USART2)
+    if (huart->Instance == USART1)
     {
         g_gps_read_okay = true;
+    }
+}
+
+/**
+ * @brief HAL callback fired when the USART1 reception errors out (framing/noise/overrun/parity)
+ *
+ * A UART error aborts the in-progress reception and resets the peripheral to idle,
+ * so the receive is re-armed here to keep the pipeline running instead of stalling forever.
+ */
+void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
+{
+    if (huart->Instance == USART1)
+    {
+        g_gps_uart_error_code = huart->ErrorCode;
+        g_gps_uart_error_count++;
+        read_uart_gps_module(g_gps_data);
     }
 }
